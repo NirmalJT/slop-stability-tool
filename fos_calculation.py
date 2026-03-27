@@ -93,7 +93,7 @@ def plot_fos_vs_slope(c, phi, gamma, H):
 
     plt.plot(slopes, fos_values, marker="o")
 
-    plt.title("FOS vs Slope Angle")
+    plt.title("Simplified LEM: FOS vs Slope Angle")
     plt.xlabel("Slope Angle (degrees)")
     plt.ylabel("Factor of Safety")
 
@@ -101,4 +101,30 @@ def plot_fos_vs_slope(c, phi, gamma, H):
 
     plt.savefig("static/fos_graph.png")
 
+    plt.close()
+
+def plot_ml_vs_slope(c, phi, H, water, soil):
+
+    import matplotlib.pyplot as plt
+    import numpy as np
+    from ml_model import predict_fos
+
+    slopes = ["1:1", "1.5:1", "2:1", "2.5:1", "3:1"]
+
+    ml_values = []
+
+    for s in slopes:
+        fos = predict_fos(c, phi, H, water, s, soil)   # ✅ INDENTED
+        ml_values.append(fos)
+
+    plt.figure()
+    plt.plot(slopes, ml_values, marker="o", color="green")
+
+    plt.title("ML Prediction: FOS vs Slope Ratio")
+    plt.xlabel("Slope Ratio")
+    plt.ylabel("Factor of Safety")
+
+    plt.grid()
+
+    plt.savefig("static/ml_graph.png")
     plt.close()

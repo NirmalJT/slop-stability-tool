@@ -1,15 +1,19 @@
-import pandas as pd
-from sklearn.ensemble import RandomForestRegressor
+import joblib
 
-data = pd.read_csv("dataset.csv")
+model = joblib.load("model.pkl")
 
-X = data[['c','phi','gamma','H','slope']]
-y = data['fos']
+def convert_slope(slope):
+    try:
+        return float(slope.split(":")[0])
+    except:
+        return 1
 
-model = RandomForestRegressor()
+def encode_soil(soil):
+    return 0 if soil == "CL" else 1
 
-model.fit(X,y)
+def predict_fos(c, phi, H, water, slope, soil):
 
-def predict_fos(c,phi,gamma,H,slope):
+    slope = convert_slope(slope)
+    soil = encode_soil(soil)
 
-    return model.predict([[c,phi,gamma,H,slope]])[0]
+    return model.predict([[c, phi, H, water, slope, soil]])[0]
