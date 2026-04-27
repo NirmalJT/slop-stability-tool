@@ -887,15 +887,7 @@
                     {% endfor %}
                   </select>
                 </div>
-                <!-- <div class="form-group full">
-                  <label>Site Location (for Alert System)</label>
-                  <input name="site_location" type="text" value="Brahmaputra Embankment, Dhubri, Assam" />
-                  <div class="field-note">auto-updated when you pin on map</div>
-                  <div class="location-actions">
-                    <button type="button" class="outline-button" id="pinLocation">Pin Location (OpenStreetMap)</button>
-                    <button type="button" class="outline-button" id="recordsButton">Records</button>
-                  </div>
-                </div> -->
+             
               </div>
               <div class="actions">
                 <button type="submit" id="predictButton">Calculate Factor of Safety</button>
@@ -1026,6 +1018,12 @@
               <div>
                 <strong id="cvMeanValue">--</strong>
                 <span>CV R2 Mean</span>
+                <div class="validation-metric">
+  <div>
+    <strong id="cvDetails">--</strong>
+    <span>5-Fold CV Scores</span>
+  </div>
+</div>
               </div>
             </div>
             <div class="validation-metric">
@@ -1056,6 +1054,28 @@
             </table>
           </div>
         </section>
+        <section class="panel" id="graphsSection" style="display:none;">
+  <div class="section-title">Model Explainability & Validation</div>
+
+  <div class="grid" style="gap:20px;">
+    
+    <div>
+      <h3>Actual vs Predicted</h3>
+      <img id="actualVsPredImg" style="width:100%; border-radius:10px;" />
+    </div>
+
+    <div>
+      <h3>Feature Importance</h3>
+      <img id="importanceImg" style="width:100%; border-radius:10px;" />
+    </div>
+
+    <div>
+      <h3>SHAP Analysis</h3>
+      <img id="shapImg" style="width:100%; border-radius:10px;" />
+    </div>
+
+  </div>
+</section>
       </main>
 
       <script>
@@ -1103,87 +1123,95 @@
             .map(([label, value]) => `<div><span>${label}</span><strong>${value}</strong></div>`)
             .join("");
         }
+function renderResult(result) {
+  latestResult = result;
+  const fos = Number(result.ml_fos);
+  const color = statusColor(fos);
+  const rankedModels = [...result.models].sort((a, b) => Number(b.r2) - Number(a.r2));
+  const bestModel = rankedModels[0];
 
-        function renderResult(result) {
-          latestResult = result;
-          const fos = Number(result.ml_fos);
-          const color = statusColor(fos);
-          const rankedModels = [...result.models].sort((a, b) => Number(b.r2) - Number(a.r2));
-          const bestModel = rankedModels[0];
+  document.getElementById("emptyState").style.display = "none";
+  document.getElementById("resultState").style.display = "block";
+  document.getElementById("validationSection").style.display = "block";
+  document.getElementById("graphsSection").style.display = "block";
 
-          document.getElementById("emptyState").style.display = "none";
-          document.getElementById("resultState").style.display = "block";
-          document.getElementById("validationSection").style.display = "block";
-          document.getElementById("modelValue").innerText = result.selected_model;
-          document.getElementById("mlValue").innerText = fos.toFixed(3);
-          document.getElementById("r2Value").innerText = result.selected_model_r2 ?? "--";
-          document.getElementById("rmseValue").innerText = result.selected_model_rmse ?? "--";
-          document.getElementById("scalePointer").style.left = `${clamp((fos / 3.5) * 100, 0, 100)}%`;
+  document.getElementById("modelValue").innerText = result.selected_model;
+  document.getElementById("mlValue").innerText = fos.toFixed(3);
+  document.getElementById("r2Value").innerText = result.selected_model_r2 ?? "--";
+  document.getElementById("rmseValue").innerText = result.selected_model_rmse ?? "--";
+  document.getElementById("scalePointer").style.left = `${clamp((fos / 3.5) * 100, 0, 100)}%`;
 
-          setLamp(fos);
+  setLamp(fos);
 
-          const statusBox = document.getElementById("statusBox");
-          // Update opacity logic to be compatible with hex/rgb values dynamically
-          statusBox.innerHTML = `<span class="status-pill" style="background:rgba(255,255,255,0.05);color:${color};border:1px solid ${color}">${result.status}: FoS ${fos.toFixed(3)}</span>`;
+  const statusBox = document.getElementById("statusBox");
+  statusBox.innerHTML = `<span class="status-pill" style="background:rgba(255,255,255,0.05);color:${color};border:1px solid ${color}">${result.status}: FoS ${fos.toFixed(3)}</span>`;
 
-          document.getElementById("heightText").textContent = `${result.inputs.H}m`;
-          document.getElementById("slopeFosText").textContent = `FoS = ${fos.toFixed(3)}`;
-          document.getElementById("slopeDetailText").textContent =
-            `${Number(result.inputs.slope_angle).toFixed(2)}deg | c=${result.inputs.c} kPa | phi=${result.inputs.phi}deg`;
+  document.getElementById("heightText").textContent = `${result.inputs.H}m`;
+  document.getElementById("slopeFosText").textContent = `FoS = ${fos.toFixed(3)}`;
+  document.getElementById("slopeDetailText").textContent =
+    `${Number(result.inputs.slope_angle).toFixed(2)}deg | c=${result.inputs.c} kPa | phi=${result.inputs.phi}deg`;
 
-          document.getElementById("adviceHeadline").innerText = result.recommendations.headline;
-          document.getElementById("adviceList").innerHTML = result.recommendations.actions
-            .map((item) => `<li>${item}</li>`)
-            .join("");
+  document.getElementById("adviceHeadline").innerText = result.recommendations.headline;
+  document.getElementById("adviceList").innerHTML = result.recommendations.actions
+    .map((item) => `<li>${item}</li>`)
+    .join("");
 
-          renderSnapshot(result);
+  renderSnapshot(result);
 
-          document.getElementById("modelsBody").innerHTML = rankedModels
-            .map(
-              (item, index) => `
-                <tr>
-                  <td class="${item.selected || index === 0 ? "best" : ""}">${item.model}${index === 0 ? " | Best" : ""}${item.selected ? " | Selected" : ""}</td>
-                  <td>${item.fos}</td>
-                  <td>${item.r2}</td>
-                </tr>`
-            )
-            .join("");
+  document.getElementById("modelsBody").innerHTML = rankedModels
+    .map((item, index) => `
+      <tr>
+        <td class="${item.selected || index === 0 ? "best" : ""}">
+          ${item.model}${index === 0 ? " | Best" : ""}${item.selected ? " | Selected" : ""}
+        </td>
+        <td>${item.fos}</td>
+        <td>${item.r2}</td>
+      </tr>`)
+    .join("");
 
-          document.getElementById("bestR2Value").innerText = bestModel ? Number(bestModel.r2).toFixed(3) : "--";
-          document.getElementById("bestR2Label").innerText = bestModel ? `Best R2 (${bestModel.model})` : "Best R2";
-          document.getElementById("bestFosValue").innerText = fos.toFixed(3);
-          document.getElementById("cvMeanValue").innerText = result.selected_model_cv_r2_mean ?? "--";
-          document.getElementById("validationCopy").innerText =
-            `Current ${result.condition} calculation: selected ${result.selected_model} gives FoS ${fos.toFixed(3)} (${result.status}). ` +
-            `Best model by R2 is ${bestModel ? bestModel.model : "not available"}. The table ranks all algorithms by R2 and shows their FoS prediction for the same input.`;
-          document.getElementById("validationBody").innerHTML = rankedModels
-            .map((item, index) => {
-              const modelFos = Number(item.fos);
-              const label = statusLabel(modelFos);
-              const labelColor = statusColor(modelFos);
-              return `
-                <tr>
-                  <td class="${item.selected || index === 0 ? "best" : ""}">${item.model}${index === 0 ? " | Best" : ""}${item.selected ? " | Selected" : ""}</td>
-                  <td>${modelFos.toFixed(3)}</td>
-                  <td>${Number(item.r2).toFixed(3)}</td>
-                  <td>${item.rmse ?? "--"}</td>
-                  <td>${item.mae ?? "--"}</td>
-                  <td>${item.cv_r2_mean ?? "--"}</td>
-                  <td>${item.cv_r2_std ?? "--"}</td>
-                  <td style="color:${labelColor};font-weight:800">${label}</td>
-                  <td class="rank-cell">#${index + 1}</td>
-                </tr>`;
-            })
-            .join("");
+  document.getElementById("bestR2Value").innerText = bestModel ? Number(bestModel.r2).toFixed(3) : "--";
+  document.getElementById("bestFosValue").innerText = fos.toFixed(3);
+  document.getElementById("cvMeanValue").innerText = result.selected_model_cv_r2_mean ?? "--";
 
-          const timestamp = Date.now();
-          const image = document.getElementById("mlGraph");
-          if(image) {
-            image.src = `${result.graphs.ml_graph}?t=${timestamp}`;
-            image.style.display = "block";
-          }
-        }
+  // ✅ SHOW CV DETAILS
+  if (result.cv_scores) {
+    document.getElementById("cvDetails").innerText =
+      result.cv_scores.map((v, i) => `F${i+1}:${v}`).join(" | ");
+  }
 
+  document.getElementById("validationBody").innerHTML = rankedModels
+    .map((item, index) => {
+      const modelFos = Number(item.fos);
+      const label = statusLabel(modelFos);
+      const labelColor = statusColor(modelFos);
+      return `
+        <tr>
+          <td class="${item.selected || index === 0 ? "best" : ""}">
+            ${item.model}${index === 0 ? " | Best" : ""}${item.selected ? " | Selected" : ""}
+          </td>
+          <td>${modelFos.toFixed(3)}</td>
+          <td>${Number(item.r2).toFixed(3)}</td>
+          <td>${item.rmse ?? "--"}</td>
+          <td>${item.mae ?? "--"}</td>
+          <td>${item.cv_r2_mean ?? "--"}</td>
+          <td>${item.cv_r2_std ?? "--"}</td>
+          <td style="color:${labelColor};font-weight:800">${label}</td>
+          <td>#${index + 1}</td>
+        </tr>`;
+    })
+    .join("");
+
+  // ✅ LOAD GRAPHS
+  const timestamp = Date.now();
+  document.getElementById("actualVsPredImg").src =
+    result.graphs.actual_vs_pred + "?t=" + timestamp;
+
+  document.getElementById("importanceImg").src =
+    result.graphs.importance + "?t=" + timestamp;
+
+  document.getElementById("shapImg").src =
+    result.graphs.shap + "?t=" + timestamp;
+}
         form.addEventListener("submit", async (event) => {
           event.preventDefault();
           const button = document.getElementById("predictButton");

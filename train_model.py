@@ -1,3 +1,5 @@
+from plots import plot_actual_vs_predicted, plot_feature_importance, plot_shap
+from sklearn.model_selection import cross_val_score, KFold
 from pathlib import Path
 from zipfile import ZipFile
 import re
@@ -5,12 +7,12 @@ import xml.etree.ElementTree as ET
 
 import joblib
 import pandas as pd
-from sklearn.ensemble import RandomForestRegressor
+import numpy as np
+from xgboost import XGBRegressor
+from sklearn.ensemble import RandomForestRegressor, GradientBoostingRegressor
 from sklearn.impute import SimpleImputer
-from sklearn.linear_model import LinearRegression
-from sklearn.metrics import r2_score
-from sklearn.model_selection import train_test_split
-from sklearn.neighbors import KNeighborsRegressor
+from sklearn.metrics import r2_score, mean_squared_error, mean_absolute_error
+from sklearn.model_selection import train_test_split, GridSearchCV
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
 from sklearn.svm import SVR
@@ -21,7 +23,12 @@ DATASETS = {
     "drained": Path("drained.csv"),
     "undrained": Path("undrained.csv"),
 }
+
 MODEL_DIR = Path("models")
+
+def model_filename(condition, name):
+    safe_name = name.replace(" ", "_")
+    return MODEL_DIR / f"{condition}_{safe_name}.joblib"
 RANDOM_STATE = 42
 
 FEATURE_COLUMNS = [
@@ -35,6 +42,33 @@ FEATURE_COLUMNS = [
 ]
 
 
+def add_dimensionless_features(X):
+    X = X.copy()
+    eps = 1e-6
+
+    phi_rad = np.radians(X["phi"].fillna(0))
+
+   
+    X["stability_number"] = (
+        X["c"] / ((X["saturated_unit_weight"] * X["H"]) + eps)
+    ) ** 0.5
+
+
+    X["friction_factor"] = np.tan(phi_rad)
+
+    return X
+
+# =============================
+# 🔹 Noise
+# =============================
+def add_noise(X, noise_level=0.03):
+    noise = np.random.normal(0, noise_level * X.std(), X.shape)
+    return X + noise
+
+
+# =============================
+# 🔹 Cleaning helpers
+# =============================
 def clean_column_name(name):
     return (
         str(name)
@@ -48,69 +82,32 @@ def clean_column_name(name):
     )
 
 
-def read_dataset(path):
-    try:
-        return pd.read_csv(path)
-    except UnicodeDecodeError:
-        try:
-            return pd.read_excel(path)
-        except ImportError:
-            return read_xlsx_with_stdlib(path)
-
-
-def read_xlsx_with_stdlib(path):
-    with ZipFile(path) as workbook:
-        shared_strings = []
-        namespace = {"a": "http://schemas.openxmlformats.org/spreadsheetml/2006/main"}
-
-        if "xl/sharedStrings.xml" in workbook.namelist():
-            shared_root = ET.fromstring(workbook.read("xl/sharedStrings.xml"))
-            for item in shared_root.findall("a:si", namespace):
-                shared_strings.append(
-                    "".join(text.text or "" for text in item.findall(".//a:t", namespace))
-                )
-
-        sheet_root = ET.fromstring(workbook.read("xl/worksheets/sheet1.xml"))
-        rows = []
-        for row in sheet_root.findall(".//a:sheetData/a:row", namespace):
-            values = []
-            for cell in row.findall("a:c", namespace):
-                value = cell.find("a:v", namespace)
-                cell_value = "" if value is None else value.text
-                if cell.get("t") == "s" and cell_value != "":
-                    cell_value = shared_strings[int(cell_value)]
-                values.append(cell_value)
-            rows.append(values)
-
-    return pd.DataFrame(rows[1:], columns=rows[0])
-
-
 def extract_slope_angle(value):
     if pd.isna(value):
         return None
 
     text = str(value).strip()
-    if "OR" in text.upper():
-        text = re.split(r"\bor\b", text, flags=re.IGNORECASE)[-1]
-
     numbers = re.findall(r"-?\d+(?:\.\d+)?", text)
-    if not numbers:
-        return None
-    return float(numbers[-1])
+    return float(numbers[-1]) if numbers else None
 
 
 def clean_fos(value):
     numeric_value = pd.to_numeric(value, errors="coerce")
     if pd.isna(numeric_value):
         return None
-    if numeric_value > 10:
-        return numeric_value / 1000
-    return numeric_value
+    return numeric_value / 1000 if numeric_value > 10 else numeric_value
+
+
+# =============================
+# 🔹 Load + preprocess
+# =============================
+def read_dataset(path):
+    return pd.read_csv(path)
 
 
 def load_and_preprocess_dataset(path):
     data = read_dataset(path)
-    data.columns = [clean_column_name(column) for column in data.columns]
+    data.columns = [clean_column_name(col) for col in data.columns]
 
     data = data.rename(
         columns={
@@ -125,104 +122,195 @@ def load_and_preprocess_dataset(path):
 
     data["slope_angle"] = data["slope_angle"].apply(extract_slope_angle)
 
-    for column in FEATURE_COLUMNS + ["fos"]:
-        if column not in data.columns:
-            data[column] = None
-
     X = data[FEATURE_COLUMNS].apply(pd.to_numeric, errors="coerce")
     y = data["fos"].apply(clean_fos)
-    valid_rows = y.notna()
-    return X.loc[valid_rows], y.loc[valid_rows]
+
+    valid = y.notna()
+    X, y = X.loc[valid], y.loc[valid]
+
+    # Add features + noise
+    X = add_dimensionless_features(X)
+    X = add_noise(X)
+
+    # Clean invalid values
+    X = X[(X["H"] > 0) & (X["phi"] >= 0) & (X["c"] >= 0)]
+    y = y.loc[X.index]
+
+    return X, y
 
 
+# =============================
+# 🔹 Models
+# =============================
 def build_models():
     return {
-        "Linear Regression": Pipeline(
-            [
-                ("imputer", SimpleImputer()),
-                ("scaler", StandardScaler()),
-                ("model", LinearRegression()),
-            ]
-        ),
-        "Random Forest": Pipeline(
-            [
-                ("imputer", SimpleImputer()),
-                ("model", RandomForestRegressor(n_estimators=300, random_state=RANDOM_STATE)),
-            ]
-        ),
-        "Decision Tree": Pipeline(
-            [
-                ("imputer", SimpleImputer()),
-                ("model", DecisionTreeRegressor(random_state=RANDOM_STATE)),
-            ]
-        ),
-        "SVR": Pipeline(
-            [("imputer", SimpleImputer()), ("scaler", StandardScaler()), ("model", SVR())]
-        ),
-        "KNN": Pipeline(
-            [
-                ("imputer", SimpleImputer()),
-                ("scaler", StandardScaler()),
-                ("model", KNeighborsRegressor(n_neighbors=5)),
-            ]
-        ),
+        "Random Forest": Pipeline([
+            ("imputer", SimpleImputer()),
+            ("model", RandomForestRegressor(random_state=RANDOM_STATE))
+        ]),
+        "Gradient Boosting": Pipeline([
+            ("imputer", SimpleImputer()),
+            ("model", GradientBoostingRegressor(random_state=RANDOM_STATE))
+        ]),
+        "SVR": Pipeline([
+            ("imputer", SimpleImputer()),
+            ("scaler", StandardScaler()),
+            ("model", SVR())
+        ]),
+        "Decision Tree": Pipeline([
+            ("imputer", SimpleImputer()),
+            ("model", DecisionTreeRegressor(max_depth=3,random_state=RANDOM_STATE))
+        ]),
+        "XGBoost": Pipeline([
+             ("imputer", SimpleImputer()),
+             ("model", XGBRegressor(objective="reg:squarederror",random_state=RANDOM_STATE,verbosity=0,
+             n_jobs=-1
+))
+]),
     }
 
 
-def model_filename(condition, model_name):
-    safe_model_name = model_name.lower().replace(" ", "_")
-    return MODEL_DIR / f"{condition}_{safe_model_name}.joblib"
+# =============================
+# 🔹 Training
+# =============================
+def train_condition(condition, path):
+    X, y = load_and_preprocess_dataset(path)
 
-
-def train_condition(condition, dataset_path):
-    X, y = load_and_preprocess_dataset(dataset_path)
     X_train, X_test, y_train, y_test = train_test_split(
         X, y, test_size=0.2, random_state=RANDOM_STATE
     )
 
-    scores = {}
-    trained_models = {}
+    results = {}
 
     for name, model in build_models().items():
-        model.fit(X_train, y_train)
-        predictions = model.predict(X_test)
-        score = round(float(r2_score(y_test, predictions)), 3)
 
-        scores[name] = score
-        trained_models[name] = model
-        joblib.dump(model, model_filename(condition, name))
+        # Parameter grids
+        if name == "Random Forest":
+            param_grid = {
+                "model__n_estimators": [100, 200],
+                "model__max_depth": [3, 4]
+            }
 
-    best_model_name = max(scores, key=scores.get)
-    joblib.dump(trained_models[best_model_name], MODEL_DIR / f"{condition}_best_model.joblib")
+        elif name == "Gradient Boosting":
+            param_grid = {
+                "model__n_estimators": [100, 200],
+                "model__learning_rate": [0.05, 0.1],
+                "model__max_depth": [3, 4]
+            }
+
+        elif name == "SVR":
+            param_grid = {
+                "model__C": [1, 10],
+                "model__epsilon": [0.1, 0.2]
+            }
+        elif name == "XGBoost":
+            param_grid = {
+               "model__n_estimators": [100, 200],
+               "model__learning_rate": [0.05, 0.1],
+               "model__max_depth": [3, 4]
+    }
+
+        else:
+            param_grid = {}
+
+        grid = GridSearchCV(model, param_grid, cv=5, scoring="r2", n_jobs=-1)
+        grid.fit(X_train, y_train)
+
+        best_model = grid.best_estimator_
+        # =============================
+        # 5-Fold CV Evaluation (REPORTING)
+        # =============================
+     
+
+        cv = KFold(n_splits=5, shuffle=True, random_state=42)
+
+        cv_scores = cross_val_score(best_model, X, y, cv=cv, scoring="r2")
+        print(f"\n{condition} - {name} 5-Fold CV R² Scores:")
+        for i, score in enumerate(cv_scores, 1):
+            print(f"Fold {i}: {round(score, 4)}")
+
+        print(f"Mean R²: {round(cv_scores.mean(), 4)} ± {round(cv_scores.std(), 4)}")
+
+        # Predictions
+        y_pred = best_model.predict(X_test)
+         # =============================
+        # Save predictions
+        # =============================
+        csv_path = f"models/{condition}_{name}_test.csv"
+
+        pd.DataFrame({
+            "actual": y_test,
+            "predicted": y_pred
+        }).to_csv(csv_path, index=False)
+
+        # =============================
+        # Create plots
+        # =============================
+        plot_actual_vs_predicted(
+            csv_path,
+            name,
+            f"static/{condition}_{name}_actual_vs_pred.png"
+        )
+
+        # Feature importance (only for tree models)
+        if name in ["Random Forest", "Gradient Boosting", "XGBoost"]:
+            plot_feature_importance(
+                best_model,
+                X_train.columns,
+                f"static/{condition}_{name}_importance.png"
+            )
+
+        # SHAP plot
+        if name in ["Random Forest", "Gradient Boosting", "XGBoost"]:
+            plot_shap(
+                best_model,
+                X_test,
+                f"static/{condition}_{name}_shap.png"
+    )
+            
+        r2 = r2_score(y_test, y_pred)
+        rmse = np.sqrt(mean_squared_error(y_test, y_pred))
+        mae = mean_absolute_error(y_test, y_pred)
+
+        # Save predictions for graphs
+        pd.DataFrame({
+            "actual": y_test,
+            "predicted": y_pred
+        }).to_csv(f"models/{condition}_{name}_test.csv", index=False)
+
+        safe_name = name.replace(" ", "_")
+        joblib.dump(best_model, MODEL_DIR / f"{condition}_{safe_name}.joblib")
+
+        results[name] = {
+            "r2": round(r2, 4),
+            "rmse": round(rmse, 4),
+            "mae": round(mae, 4),
+            "best_params": grid.best_params_
+        }
+
+    best_model = max(results, key=lambda k: results[k]["r2"])
 
     return {
-        "dataset": str(dataset_path),
-        "scores": scores,
-        "best_model": best_model_name,
-        "rows": int(len(X)),
+        "results": results,
+        "best_model": best_model
     }
 
 
+# =============================
+# 🔹 Main
+# =============================
 def train():
     MODEL_DIR.mkdir(exist_ok=True)
 
-    metadata = {
-        "feature_columns": FEATURE_COLUMNS,
-        "conditions": {},
-        "model_names": list(build_models().keys()),
-    }
+    metadata = {"conditions": {}}
 
-    for condition, dataset_path in DATASETS.items():
-        metadata["conditions"][condition] = train_condition(condition, dataset_path)
+    for cond, path in DATASETS.items():
+        metadata["conditions"][cond] = train_condition(cond, path)
 
-    joblib.dump(metadata, MODEL_DIR / "metadata.joblib")
+    # joblib.dump(metadata, MODEL_DIR / "metadata.joblib")
 
-    print("\nModel Performance")
-    for condition, info in metadata["conditions"].items():
-        print(f"\n{condition.title()} ({info['rows']} rows)")
-        for name, score in info["scores"].items():
-            print(f"{name}: R2 = {score}")
-        print(f"Best Model: {info['best_model']}")
+    print("\nTraining Complete\n")
+    print(metadata)
 
 
 if __name__ == "__main__":

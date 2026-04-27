@@ -1,13 +1,12 @@
 from flask import Flask, jsonify, render_template, request
+import traceback
 
-from fos_calculation import plot_ml_vs_slope_angle
 from ml_model import (
     get_model_diagnostics,
     get_model_names,
     predict_all_models,
     predict_fos,
 )
-
 
 app = Flask(__name__)
 
@@ -55,8 +54,9 @@ def build_recommendations(fos, condition, model_input):
             "Conduct routine pre-monsoon and post-monsoon visual inspections to document any minor surface erosion.",
             "Maintain a healthy, deep-rooted grass cover and actively fill any animal burrows to prevent future internal piping.",
             "Keep surface drainage channels perfectly clear to prevent rainwater from pooling on the embankment crest.",
-            "Re-evaluate the Machine Learning FoS model only if there is a massive change to slope geometry (e.g., severe river scouring) or new crest loads.",
+            "Re-evaluate the Machine Learning FoS model only if there is a massive change to slope geometry or new crest loads.",
         ]
+
     if condition == "undrained":
         actions.append("For undrained checks, review short-term loading and rapid drawdown scenarios.")
     if slope_angle >= 40:
@@ -81,6 +81,7 @@ def predict():
 
         condition = data.get("condition", "drained")
         model_name = data.get("model_name") or "Random Forest"
+
         model_input = {
             "unsaturated_unit_weight": as_float(data, "unsaturated_unit_weight", 18),
             "saturated_unit_weight": as_float(data, "saturated_unit_weight", 20),
@@ -92,15 +93,20 @@ def predict():
         }
 
         ml_fos = predict_fos(condition=condition, model_name=model_name, **model_input)
+
         models = predict_all_models(
             condition=condition, selected_model=model_name, **model_input
         )
-        diagnostics = get_model_diagnostics(condition=condition, model_name=model_name)
+
+        diagnostics = get_model_diagnostics(
+            condition=condition, model_name=model_name
+        )
+
         selected = next((item for item in models if item["model"] == model_name), None)
 
-        plot_ml_vs_slope_angle(
-            condition=condition, model_name=model_name, **model_input
-        )
+        # plot_ml_vs_slope_angle(
+        #     condition=condition, model_name=model_name, **model_input
+        # )
 
         if ml_fos < 1:
             status, color = "Unstable", "red"
@@ -109,29 +115,42 @@ def predict():
         else:
             status, color = "Stable", "green"
 
-        return jsonify(
-            {
-                "ml_fos": round(ml_fos, 3),
-                "condition": condition,
-                "site_location": data.get("site_location", ""),
-                "selected_model": model_name,
-                "selected_model_r2": selected["r2"] if selected else None,
-                "selected_model_rmse": diagnostics["rmse"],
-                "selected_model_mae": diagnostics["mae"],
-                "selected_model_cv_r2_mean": diagnostics["cv_r2_mean"],
-                "selected_model_cv_r2_std": diagnostics["cv_r2_std"],
-                "diagnostics": diagnostics,
-                "models": models,
-                "status": status,
-                "color": color,
-                "recommendations": build_recommendations(ml_fos, condition, model_input),
-                "inputs": model_input,
-                "graphs": {"ml_graph": "/static/ml_graph.png"},
+        safe_model_name = model_name.replace(" ", "_")
+         
+        return jsonify({
+            "ml_fos": round(ml_fos, 3),
+            "condition": condition,
+            "site_location": data.get("site_location", ""),
+            "selected_model": model_name,
+            "selected_model_r2": selected["r2"] if selected else None,
+            "selected_model_rmse": diagnostics["rmse"],
+            "selected_model_mae": diagnostics["mae"],
+            "selected_model_cv_r2_mean": diagnostics["cv_r2_mean"],
+            "selected_model_cv_r2_std": diagnostics["cv_r2_std"],
+
+   
+            "cv_scores": diagnostics["cv_scores"],
+
+            "diagnostics": diagnostics,
+            "models": models,
+            "status": status,
+            "color": color,
+            "recommendations": build_recommendations(ml_fos, condition, model_input),
+            "inputs": model_input,
+
+            "graphs": {
+                "actual_vs_pred": f"/static/{condition}_{safe_model_name}_actual_vs_pred.png",
+                "shap": f"/static/{condition}_{safe_model_name}_shap.png",
+                "importance": f"/static/{condition}_{safe_model_name}_importance.png"
             }
-        )
+        })
+
     except Exception as exc:
+        print("\n===== ERROR TRACE =====")
+        traceback.print_exc()  
+        print("===== END ERROR =====\n")
         return jsonify({"status": "error", "message": str(exc)}), 400
 
+
 if __name__ == "__main__":
-    # host='0.0.0.0' allows external devices to connect
     app.run(host='0.0.0.0', port=5000, debug=True, use_reloader=False)
