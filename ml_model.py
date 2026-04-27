@@ -11,23 +11,27 @@ from train_model import (
     FEATURE_COLUMNS,
     load_and_preprocess_dataset,
     model_filename,
+    train,
    
 )
 
-MODEL_DIR = Path("models")
+from pathlib import Path
+
+BASE_DIR = Path(__file__).resolve().parent
+MODEL_DIR = BASE_DIR / "models"
 
 
 # =============================
 # 🔹 Ensure models exist
 # =============================
-# def _ensure_models_exist():
-#     if not (MODEL_DIR / "metadata.joblib").exists():
-#         train()
+def _ensure_models_exist():
+    if not (MODEL_DIR / "metadata.joblib").exists():
+        train()
 
 
-# def _load_metadata():
-#     _ensure_models_exist()
-#     return joblib.load(MODEL_DIR / "metadata.joblib")
+def _load_metadata():
+    _ensure_models_exist()
+    return joblib.load(MODEL_DIR / "metadata.joblib")
 
 
 # =============================
