@@ -1197,8 +1197,6 @@ function renderResult(result) {
   document.getElementById("bestR2Value").innerText = bestModel ? Number(bestModel.r2).toFixed(3) : "--";
   document.getElementById("bestFosValue").innerText = fos.toFixed(3);
   document.getElementById("cvMeanValue").innerText = result.selected_model_cv_r2_mean ?? "--";
-
-  // ✅ SHOW CV DETAILS
   if (result.cv_scores) {
     document.getElementById("cvDetails").innerText =
       result.cv_scores.map((v, i) => `F${i+1}:${v}`).join(" | ");
@@ -1226,16 +1224,32 @@ function renderResult(result) {
     })
     .join("");
 
-  // ✅ LOAD GRAPHS
-  const timestamp = Date.now();
-  document.getElementById("actualVsPredImg").src =
-    result.graphs.actual_vs_pred + "?t=" + timestamp;
 
+ const timestamp = Date.now();
+
+// Always show actual vs predicted
+document.getElementById("actualVsPredImg").src =
+  result.graphs.actual_vs_pred + "?t=" + timestamp;
+
+
+// Feature Importance
+if (result.graphs.importance) {
   document.getElementById("importanceImg").src =
     result.graphs.importance + "?t=" + timestamp;
+  document.getElementById("importanceImg").style.display = "block";
+} else {
+  document.getElementById("importanceImg").style.display = "none";
+}
 
+
+// SHAP
+if (result.graphs.shap) {
   document.getElementById("shapImg").src =
     result.graphs.shap + "?t=" + timestamp;
+  document.getElementById("shapImg").style.display = "block";
+} else {
+  document.getElementById("shapImg").style.display = "none";
+}
 }
         form.addEventListener("submit", async (event) => {
           event.preventDefault();

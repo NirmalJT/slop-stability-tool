@@ -1,12 +1,14 @@
 from flask import Flask, jsonify, render_template, request
 import traceback
-
+from pathlib import Path
+import os
 from ml_model import (
     get_model_diagnostics,
     get_model_names,
     predict_all_models,
     predict_fos,
 )
+
 
 app = Flask(__name__)
 
@@ -33,7 +35,9 @@ def build_recommendations(fos, condition, model_input):
             "Consult a senior geotechnical engineer immediately to design emergency stabilizing berms or sheet pile walls.",
         ]
     elif fos < 1.2:
-        headline = "FoS 1.0-1.2: Marginal Stability — High Risk of Creep or Localized Failure"
+        headline = (
+            "FoS 1.0-1.2: Marginal Stability — High Risk of Creep or Localized Failure"
+        )
         actions = [
             "Strictly prohibit all surcharge loads (vehicles, construction materials, heavy machinery) on or near the crest.",
             "Initiate daily visual inspections specifically looking for longitudinal tension cracks on the crest and bulging at the toe.",
@@ -49,7 +53,9 @@ def build_recommendations(fos, condition, model_input):
             "Verify that actual field soil conditions (unit weight, moisture content) match your Plaxis design parameters before assuming long-term safety.",
         ]
     else:
-        headline = "FoS >= 1.5: Long-Term Stable — Meets Standard Geotechnical Design Criteria"
+        headline = (
+            "FoS >= 1.5: Long-Term Stable — Meets Standard Geotechnical Design Criteria"
+        )
         actions = [
             "Conduct routine pre-monsoon and post-monsoon visual inspections to document any minor surface erosion.",
             "Maintain a healthy, deep-rooted grass cover and actively fill any animal burrows to prevent future internal piping.",
@@ -58,13 +64,21 @@ def build_recommendations(fos, condition, model_input):
         ]
 
     if condition == "undrained":
-        actions.append("For undrained checks, review short-term loading and rapid drawdown scenarios.")
+        actions.append(
+            "For undrained checks, review short-term loading and rapid drawdown scenarios."
+        )
     if slope_angle >= 40:
-        actions.append("The entered slope angle is steep; compare alternatives at lower angles.")
+        actions.append(
+            "The entered slope angle is steep; compare alternatives at lower angles."
+        )
     if height >= 10:
-        actions.append("The entered height is high; consider staged berms or intermediate benches.")
+        actions.append(
+            "The entered height is high; consider staged berms or intermediate benches."
+        )
     if cohesion < 10 or friction < 10:
-        actions.append("Low strength inputs are controlling the result; confirm lab/test values.")
+        actions.append(
+            "Low strength inputs are controlling the result; confirm lab/test values."
+        )
 
     return {"headline": headline, "actions": actions[:6]}
 
@@ -98,9 +112,7 @@ def predict():
             condition=condition, selected_model=model_name, **model_input
         )
 
-        diagnostics = get_model_diagnostics(
-            condition=condition, model_name=model_name
-        )
+        diagnostics = get_model_diagnostics(condition=condition, model_name=model_name)
 
         selected = next((item for item in models if item["model"] == model_name), None)
 
@@ -114,43 +126,55 @@ def predict():
             status, color = "Marginally Stable", "orange"
         else:
             status, color = "Stable", "green"
-
+        BASE_DIR = Path(__file__).resolve().parent
+        STATIC_DIR = BASE_DIR / "static"
         safe_model_name = model_name.replace(" ", "_")
-         
-        return jsonify({
-            "ml_fos": round(ml_fos, 3),
-            "condition": condition,
-            "site_location": data.get("site_location", ""),
-            "selected_model": model_name,
-            "selected_model_r2": selected["r2"] if selected else None,
-            "selected_model_rmse": diagnostics["rmse"],
-            "selected_model_mae": diagnostics["mae"],
-            "selected_model_cv_r2_mean": diagnostics["cv_r2_mean"],
-            "selected_model_cv_r2_std": diagnostics["cv_r2_std"],
+        graphs = {
+            "actual_vs_pred": f"/static/{condition}_{safe_model_name}_actual_vs_pred.png",
+            "shap": None,
+            "importance": None,
+        }
 
-   
-            "cv_scores": diagnostics["cv_scores"],
+       # Absolute file paths (correct)
+        shap_file = STATIC_DIR / f"{condition}_{safe_model_name}_shap.png"
+        imp_file = STATIC_DIR / f"{condition}_{safe_model_name}_importance.png"
 
-            "diagnostics": diagnostics,
-            "models": models,
-            "status": status,
-            "color": color,
-            "recommendations": build_recommendations(ml_fos, condition, model_input),
-            "inputs": model_input,
+        if shap_file.exists():
+            graphs["shap"] = f"/static/{condition}_{safe_model_name}_shap.png"
 
-            "graphs": {
-                "actual_vs_pred": f"/static/{condition}_{safe_model_name}_actual_vs_pred.png",
-                "shap": f"/static/{condition}_{safe_model_name}_shap.png",
-                "importance": f"/static/{condition}_{safe_model_name}_importance.png"
+        if imp_file.exists():
+            graphs["importance"] = f"/static/{condition}_{safe_model_name}_importance.png"
+
+        return jsonify(
+            {
+                "ml_fos": round(ml_fos, 3),
+                "condition": condition,
+                "site_location": data.get("site_location", ""),
+                "selected_model": model_name,
+                "selected_model_r2": selected["r2"] if selected else None,
+                "selected_model_rmse": diagnostics["rmse"],
+                "selected_model_mae": diagnostics["mae"],
+                "selected_model_cv_r2_mean": diagnostics["cv_r2_mean"],
+                "selected_model_cv_r2_std": diagnostics["cv_r2_std"],
+                "cv_scores": diagnostics["cv_scores"],
+                "diagnostics": diagnostics,
+                "models": models,
+                "status": status,
+                "color": color,
+                "recommendations": build_recommendations(
+                    ml_fos, condition, model_input
+                ),
+                "inputs": model_input,
+                "graphs": graphs,
             }
-        })
+        )
 
     except Exception as exc:
         print("\n===== ERROR TRACE =====")
-        traceback.print_exc()  
+        traceback.print_exc()
         print("===== END ERROR =====\n")
         return jsonify({"status": "error", "message": str(exc)}), 400
 
 
 if __name__ == "__main__":
-    app.run(host='0.0.0.0', port=5000, debug=True, use_reloader=False)
+    app.run(host="0.0.0.0", port=5000, debug=True, use_reloader=False)

@@ -126,7 +126,7 @@ def make_feature_frame(
 
     df = pd.DataFrame([data])
 
-    # ✅ ADD SAME FEATURES AS TRAINING
+
     phi_rad = np.radians(df["phi"].fillna(0))
 
     df["stability_number"] = (
