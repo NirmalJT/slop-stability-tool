@@ -1,130 +1,34 @@
+from pathlib import Path
+
 import matplotlib
-matplotlib.use('Agg')
+
+matplotlib.use("Agg")
 import matplotlib.pyplot as plt
-import math
+
+from ml_model import predict_fos
 
 
-def calculate_fos(c, phi, gamma, H, slope_angle):
-
-    phi_rad = math.radians(phi)
-    beta = math.radians(slope_angle)
-
-    resisting_force = c + (gamma * H * math.cos(beta) * math.tan(phi_rad))
-    driving_force = gamma * H * math.sin(beta)
-
-    fos = resisting_force / driving_force
-
-    return round(fos, 3)
+STATIC_DIR = Path("static")
 
 
-def plot_slope(H, slope_angle):
+def plot_ml_vs_slope_angle(condition="drained", model_name=None, **kwargs):
+    STATIC_DIR.mkdir(exist_ok=True)
+    angles = [20, 25, 30, 35, 40, 45, 50]
+    predictions = []
 
-    import numpy as np
+    for angle in angles:
+        model_input = dict(kwargs)
+        model_input["slope_angle"] = angle
+        predictions.append(
+            predict_fos(condition=condition, model_name=model_name, **model_input)
+        )
 
-    length = H / math.tan(math.radians(slope_angle))
-
-    x = [0, length, length + 5]
-    y = [H, 0, 0]
-
-    plt.figure()
-
-    # plot slope
-    plt.plot(x, y, marker="o", label="Slope")
-
-    center_x = length / 2
-    center_y = -H
-
-    min_radius = H * 1.2
-    max_radius = H * 2.5
-
-    radii = np.linspace(min_radius, max_radius, 20)
-
-    critical_radius = None
-    min_fos = 999
-
-    for r in radii:
-
-        theta = np.linspace(30,150,100)
-
-        arc_x = center_x + r * np.cos(np.radians(theta))
-        arc_y = center_y + r * np.sin(np.radians(theta))
-
-        fos = r / (H + 1)
-
-        if fos < min_fos:
-            min_fos = fos
-            critical_radius = r
-
-        plt.plot(arc_x, arc_y, color="gray", alpha=0.4)
-
-    # plot critical surface
-    theta = np.linspace(30,150,100)
-
-    arc_x = center_x + critical_radius * np.cos(np.radians(theta))
-    arc_y = center_y + critical_radius * np.sin(np.radians(theta))
-
-    plt.plot(arc_x, arc_y, color="red", linewidth=3, label="Critical Slip Surface")
-
-    plt.title("Slope Stability Analysis")
-    plt.xlabel("Distance")
-    plt.ylabel("Height")
-
-    plt.legend()
-    plt.grid()
-
-    plt.savefig("static/slope.png")
-
-    plt.close()
-
-
-def plot_fos_vs_slope(c, phi, gamma, H):
-
-    import numpy as np
-
-    slopes = [20, 30, 40, 50, 60]
-
-    fos_values = []
-
-    for s in slopes:
-        fos = calculate_fos(c, phi, gamma, H, s)
-        fos_values.append(fos)
-
-    plt.figure()
-
-    plt.plot(slopes, fos_values, marker="o")
-
-    plt.title("Simplified LEM: FOS vs Slope Angle")
-    plt.xlabel("Slope Angle (degrees)")
-    plt.ylabel("Factor of Safety")
-
-    plt.grid()
-
-    plt.savefig("static/fos_graph.png")
-
-    plt.close()
-
-def plot_ml_vs_slope(c, phi, H, water, soil):
-
-    import matplotlib.pyplot as plt
-    import numpy as np
-    from ml_model import predict_fos
-
-    slopes = ["1:1", "1.5:1", "2:1", "2.5:1", "3:1"]
-
-    ml_values = []
-
-    for s in slopes:
-        fos = predict_fos(c, phi, H, water, s, soil)   # ✅ INDENTED
-        ml_values.append(fos)
-
-    plt.figure()
-    plt.plot(slopes, ml_values, marker="o", color="green")
-
-    plt.title("ML Prediction: FOS vs Slope Ratio")
-    plt.xlabel("Slope Ratio")
-    plt.ylabel("Factor of Safety")
-
-    plt.grid()
-
-    plt.savefig("static/ml_graph.png")
+    plt.figure(figsize=(6, 4))
+    plt.plot(angles, predictions, marker="o", color="#0f766e")
+    plt.xlabel("Slope angle (degrees)")
+    plt.ylabel("ML predicted FOS")
+    plt.title("ML FOS vs Slope Angle")
+    plt.grid(alpha=0.25)
+    plt.tight_layout()
+    plt.savefig(STATIC_DIR / "ml_graph.png", dpi=140)
     plt.close()
